@@ -12,6 +12,75 @@ Proactive Runtime Injection Shield & Monitor for [OpenClaw](https://github.com/o
 
 PRISM is a zero-fork security layer that adds runtime defense for OpenClaw gateways against prompt injection, risky tool execution, outbound secret leakage, and critical file tampering.
 
+## Technical Highlights
+
+<table>
+<tr>
+<td width="50%">
+
+### :shield: Defense in Depth — 10 Lifecycle Hooks
+
+Not a single checkpoint — PRISM intercepts **every stage** of the agent lifecycle from message ingress to outbound response. Hooks cover prompt build, tool invocation, result persistence, sub-agent spawning, and session teardown. An attack must bypass all 10 layers to succeed.
+
+</td>
+<td width="50%">
+
+### :brain: Two-Tier Injection Scanning
+
+Fast deterministic heuristics run first (10 regex rules with weighted scoring). Only ambiguous inputs cascade to Ollama LLM classification. Score `>= 70` short-circuits as malicious — no LLM round-trip wasted. LLM output is **never trusted**: JSON is regex-extracted and values are clamped before use.
+
+</td>
+</tr>
+<tr>
+<td>
+
+### :lock: HMAC-Signed Tamper-Evident Audit Trail
+
+Every security event is written to an append-only JSONL log with per-entry **HMAC-SHA256** signatures. The CLI `audit verify` command walks the entire log and flags any tampered record. Unsigned entries are refused at write time — the system will not produce unverifiable records.
+
+</td>
+<td>
+
+### :busts_in_silhouette: Multi-Tenant Session Isolation
+
+Risk scores accumulate **per-session** with TTL-based decay. The plugin explicitly distinguishes `conversationId`, `sessionKey`, and `channelId` — shared channel identifiers are never used as risk keys, preventing **cross-session contamination** between users on the same channel.
+
+</td>
+</tr>
+<tr>
+<td>
+
+### :key: RBAC Proxy with Hot-Reloadable Policy
+
+The Invoke Guard proxy enforces per-client access control: bearer token auth, session ownership prefixes, tool allow/deny lists, and dangerous exec pattern detection. Policies reload on **SIGHUP** without restart — zero-downtime policy updates in production.
+
+</td>
+<td>
+
+### :detective: Outbound DLP + Exec Sandboxing
+
+Outgoing messages are scanned for credential patterns (AWS keys, SSH private keys, Slack/GitHub/OpenAI tokens) before they leave the gateway. Exec commands pass through a **whitelist-first, blacklist-second** pipeline — even whitelisted commands are blocked if they match dangerous patterns.
+
+</td>
+</tr>
+<tr>
+<td>
+
+### :file_folder: Real-Time File Integrity Monitoring
+
+Critical files are watched via `chokidar` events **plus** periodic SHA-256 reconciliation as a fallback. Dual detection ensures tampering is caught even on filesystems where events are unreliable (NFS, containers). Changes are logged with HMAC-signed audit entries.
+
+</td>
+<td>
+
+### :test_tube: 67 Tests — 1:1 Test-to-Source Ratio
+
+Every security-critical path is tested: hook registration, risk thresholds, cross-session isolation, tool blocking, token auth, session ownership, exec patterns, and audit HMAC verification. Tests use proper mocking, boundary-condition checks, and both positive and negative cases.
+
+</td>
+</tr>
+</table>
+
 ## What It Adds
 
 PRISM runs as one OpenClaw plugin plus three sidecar services:

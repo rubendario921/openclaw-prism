@@ -257,7 +257,7 @@ echo ""
 echo "  Config:   $INSTALL_DIR/config/"
 echo "  Secrets:  $ENV_FILE"
 echo "  Logs:     $SECURITY_DIR/audit.jsonl"
-echo "  Plugin:   $PLUGIN_LINK"
+echo "  Plugin:   $PLUGIN_DIR"
 echo ""
 if grep -q "change-me" "$ENV_FILE" 2>/dev/null; then
   echo "  NOTE: Set OPENCLAW_GATEWAY_TOKEN in $ENV_FILE"

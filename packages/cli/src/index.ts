@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { verifyAuditEntry } from "@kyaclaw/shared/audit";
 
 // Auto-load .env from install directory
-const INSTALL_DIR = "/opt/kyaclaw-prism";
+const INSTALL_DIR = "/opt/openclaw-prism";
 const ENV_FILE = join(INSTALL_DIR, ".env");
 if (existsSync(ENV_FILE)) {
   for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
@@ -26,7 +26,7 @@ const AUDIT_LOG = join(AUDIT_DIR, "audit.jsonl");
 
 const program = new Command();
 program
-  .name("kyaclaw-prism")
+  .name("openclaw-prism")
   .description("KyaClaw PRISM — Proactive Runtime Injection Shield & Monitor")
   .version("0.1.0");
 

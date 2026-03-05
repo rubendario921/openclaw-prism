@@ -159,8 +159,8 @@ Risk scores accumulate from multiple detection sources and decay over time, prev
 ### Install
 
 ```bash
-git clone https://github.com/KyaClaw/kyaclaw-prism.git
-cd kyaclaw-prism
+git clone https://github.com/KyaClaw/openclaw-prism.git
+cd openclaw-prism
 bash install.sh
 ```
 
@@ -188,8 +188,8 @@ curl -X POST http://127.0.0.1:18766/scan \
 # => {"verdict":"malicious","score":75,"reasons":["override-instruction","tool-abuse-cmd"]}
 
 # Audit log
-node /opt/kyaclaw-prism/packages/cli/src/index.ts audit tail
-node /opt/kyaclaw-prism/packages/cli/src/index.ts audit verify
+node /opt/openclaw-prism/packages/cli/src/index.ts audit tail
+node /opt/openclaw-prism/packages/cli/src/index.ts audit verify
 ```
 
 ### Uninstall
@@ -205,7 +205,7 @@ Clean removal with automatic `openclaw.json` restoration (timestamped backup).
 ## Project Structure
 
 ```
-kyaclaw-prism/
+openclaw-prism/
 ├── packages/
 │   ├── shared/        Types, heuristic patterns (10), HMAC audit logger
 │   ├── plugin/        Security Plugin (10 hooks, embedded in OpenClaw)

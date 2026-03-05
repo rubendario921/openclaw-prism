@@ -11,7 +11,7 @@ else
   REAL_HOME="$HOME"
 fi
 
-INSTALL_DIR="/opt/kyaclaw-prism"
+INSTALL_DIR="/opt/openclaw-prism"
 OPENCLAW_DIR="$REAL_HOME/.openclaw"
 OPENCLAW_JSON="$OPENCLAW_DIR/openclaw.json"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"

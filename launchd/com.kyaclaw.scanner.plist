@@ -8,7 +8,7 @@
   <array>
     <string>/usr/local/bin/node</string>
     <string>--enable-source-maps</string>
-    <string>/opt/kyaclaw-prism/packages/scanner/dist/index.js</string>
+    <string>/opt/openclaw-prism/packages/scanner/dist/index.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

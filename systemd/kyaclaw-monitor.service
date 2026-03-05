@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=__KYACLAW_USER__
-ExecStart=/usr/bin/node --enable-source-maps /opt/kyaclaw-prism/packages/monitor/dist/index.js
+ExecStart=/usr/bin/node --enable-source-maps /opt/openclaw-prism/packages/monitor/dist/index.js
 Environment=KYACLAW_MONITOR_START=1
 Restart=on-failure
 RestartSec=5

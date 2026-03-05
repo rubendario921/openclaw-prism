@@ -7,7 +7,7 @@
     ".": "./dist/index.js"
   },
   "bin": {
-    "kyaclaw-prism": "./dist/index.js"
+    "openclaw-prism": "./dist/index.js"
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm",

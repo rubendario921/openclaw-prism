@@ -360,7 +360,7 @@ export default function register(api: OpenClawPluginApi) {
   // ── Hook 10: gateway_start → startup self-check + start periodic sweep ──
   api.on("gateway_start", () => {
     startSweepTimer();
-    api.logger?.info?.("[security] kyaclaw-prism security plugin active — all hooks registered");
+    api.logger?.info?.("[security] openclaw-prism security plugin active — all hooks registered");
   });
 }
 

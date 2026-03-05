@@ -154,13 +154,14 @@ if [ -L "$PLUGIN_DIR" ] || [ -d "$PLUGIN_DIR" ]; then
   rm -rf "$PLUGIN_DIR"
 fi
 
-# Copy plugin as a real directory
+# Copy plugin as a real directory (exclude node_modules, we handle deps separately)
 mkdir -p "$PLUGIN_DIR"
-rsync -a --delete "$INSTALL_DIR/packages/plugin/" "$PLUGIN_DIR/"
+rsync -a --delete --exclude='node_modules' "$INSTALL_DIR/packages/plugin/" "$PLUGIN_DIR/"
 
 # Copy @kyaclaw/shared dependency (plugin imports from it)
+rm -rf "$PLUGIN_DIR/node_modules"
 mkdir -p "$PLUGIN_DIR/node_modules/@kyaclaw"
-rsync -a --delete "$INSTALL_DIR/packages/shared/" "$PLUGIN_DIR/node_modules/@kyaclaw/shared/"
+rsync -a "$INSTALL_DIR/packages/shared/" "$PLUGIN_DIR/node_modules/@kyaclaw/shared/"
 
 echo "  Installed plugin to $PLUGIN_DIR"
 

@@ -28,6 +28,17 @@ const PORT = Number(process.env.DASHBOARD_PORT ?? "18768");
 const MAX_BODY = 512 * 1024; // 512KB
 const INTERNAL_AUDIT_TIMEOUT_MS = 1200;
 const DEFAULT_AUDIT_LOG = join(homedir(), ".openclaw", "security", "audit.jsonl");
+const DEFAULT_PROXY_HEALTH_URL = "http://127.0.0.1:18767/healthz";
+const DEFAULT_GATEWAY_PORT = 18789;
+const COMPONENT_PROBE_TIMEOUT_MS = 900;
+
+type ComponentStatus = {
+  name: string;
+  ok: boolean;
+  url?: string;
+  status?: number;
+  detail?: string;
+};
 
 // ── Utility functions (same pattern as scanner/proxy) ──
 
@@ -67,6 +78,77 @@ function getInternalAuditPort(): number {
 
 function getAuditPath(): string {
   return process.env.PRISM_AUDIT_LOG ?? DEFAULT_AUDIT_LOG;
+}
+
+function getScannerHealthUrl(): string {
+  const host = process.env.SCANNER_HOST?.trim() || "127.0.0.1";
+  const port = Number(process.env.SCANNER_PORT ?? "18766");
+  return `http://${host}:${port}/healthz`;
+}
+
+function getProxyHealthUrl(): string {
+  const raw = process.env.PRISM_PROXY_HEALTH_URL?.trim();
+  return raw || DEFAULT_PROXY_HEALTH_URL;
+}
+
+function getGatewayHealthUrl(): string {
+  const port = Number(process.env.OPENCLAW_GATEWAY_PORT ?? String(DEFAULT_GATEWAY_PORT));
+  return `http://127.0.0.1:${port}/`;
+}
+
+function getInternalAuditProbeUrl(): string {
+  return `http://127.0.0.1:${getInternalAuditPort()}/internal/audit`;
+}
+
+async function probeComponent(
+  name: string,
+  url: string,
+  isHealthyStatus: (status: number) => boolean,
+): Promise<ComponentStatus> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMPONENT_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { method: "GET", signal: controller.signal });
+    const status = response.status;
+    return {
+      name,
+      ok: isHealthyStatus(status),
+      url,
+      status,
+      detail: isHealthyStatus(status) ? "online" : `unexpected status ${status}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      name,
+      ok: false,
+      url,
+      detail: message,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function listComponentStatuses(): Promise<ComponentStatus[]> {
+  const probes: Array<Promise<ComponentStatus>> = [
+    Promise.resolve({
+      name: "dashboard",
+      ok: true,
+      url: `http://${HOST}:${PORT}/healthz`,
+      status: 200,
+      detail: "online",
+    }),
+    probeComponent("scanner", getScannerHealthUrl(), (status) => status === 200),
+    probeComponent("proxy", getProxyHealthUrl(), (status) => status === 200),
+    probeComponent("gateway", getGatewayHealthUrl(), (status) => status >= 200 && status < 500),
+    probeComponent(
+      "plugin-internal-audit",
+      getInternalAuditProbeUrl(),
+      (status) => status === 404 || status === 401 || status === 200,
+    ),
+  ];
+  return Promise.all(probes);
 }
 
 function parseLimit(raw: string | null): number {
@@ -240,6 +322,15 @@ export function createServer() {
           return json(res, 200, data);
         } catch {
           return json(res, 500, { error: "failed to read config" });
+        }
+      }
+
+      if (req.method === "GET" && pathname === "/api/components/status") {
+        try {
+          const components = await listComponentStatuses();
+          return json(res, 200, { checkedAt: new Date().toISOString(), components });
+        } catch {
+          return json(res, 500, { error: "failed to probe components" });
         }
       }
 

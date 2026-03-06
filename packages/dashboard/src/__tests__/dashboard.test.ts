@@ -27,14 +27,20 @@ async function startHttpServer(
 describe("dashboard HTTP APIs", () => {
   let dashboard: http.Server | null = null;
   let internalAudit: http.Server | null = null;
+  let scanner: http.Server | null = null;
+  let proxy: http.Server | null = null;
+  let gateway: http.Server | null = null;
   const originalEnv = { ...process.env };
 
   afterEach(async () => {
-    for (const s of [dashboard, internalAudit]) {
+    for (const s of [dashboard, internalAudit, scanner, proxy, gateway]) {
       if (s) await new Promise<void>((resolve) => s.close(() => resolve()));
     }
     dashboard = null;
     internalAudit = null;
+    scanner = null;
+    proxy = null;
+    gateway = null;
     process.env = { ...originalEnv };
   });
 
@@ -69,11 +75,51 @@ describe("dashboard HTTP APIs", () => {
     });
     internalAudit = internalStarted.server;
 
+    const scannerStarted = await startHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/healthz") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    scanner = scannerStarted.server;
+
+    const proxyStarted = await startHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/healthz") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    proxy = proxyStarted.server;
+
+    const gatewayStarted = await startHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/") {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    gateway = gatewayStarted.server;
+
     process.env.PRISM_DASHBOARD_TOKEN = "dashboard-test-token";
     process.env.PRISM_INTERNAL_TOKEN = "internal-test-token";
     process.env.PRISM_INTERNAL_PORT = String(internalStarted.port);
     process.env.PRISM_SECURITY_POLICY = policyPath;
     process.env.PRISM_AUDIT_LOG = auditPath;
+    process.env.SCANNER_HOST = "127.0.0.1";
+    process.env.SCANNER_PORT = String(scannerStarted.port);
+    process.env.PRISM_PROXY_HEALTH_URL = `http://127.0.0.1:${proxyStarted.port}/healthz`;
+    process.env.OPENCLAW_GATEWAY_PORT = String(gatewayStarted.port);
 
     dashboard = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -100,6 +146,20 @@ describe("dashboard HTTP APIs", () => {
     expect(blocksJson.blocks[0]!.event).toBe("exec_whitelist_block");
     expect(blocksJson.blocks[0]!.allowAction.supported).toBe(true);
     expect(blocksJson.blocks[0]!.allowAction.type).toBe("add_exec_prefix");
+
+    const components = await fetch(`http://127.0.0.1:${port}/api/components/status`, {
+      headers: { authorization: "Bearer dashboard-test-token" },
+    });
+    expect(components.status).toBe(200);
+    const componentsJson = await components.json() as {
+      components: Array<{ name: string; ok: boolean }>;
+    };
+    const statusByName = new Map(componentsJson.components.map((component) => [component.name, component.ok]));
+    expect(statusByName.get("dashboard")).toBe(true);
+    expect(statusByName.get("scanner")).toBe(true);
+    expect(statusByName.get("proxy")).toBe(true);
+    expect(statusByName.get("gateway")).toBe(true);
+    expect(statusByName.get("plugin-internal-audit")).toBe(true);
 
     // wait for async auth_failed event delegation
     await new Promise((resolve) => setTimeout(resolve, 20));

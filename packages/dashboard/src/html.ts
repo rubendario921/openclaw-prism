@@ -106,6 +106,8 @@ tr:hover{background:rgba(88,166,255,.04)}
 <div id="tab-blocks" class="tab-content active">
 <div class="filters">
 <select id="event-filter"><option value="">All Events</option><option value="exec_whitelist_block">exec_whitelist_block</option><option value="path_block">path_block</option><option value="exec_pattern_block">exec_pattern_block</option><option value="outbound_secret_blocked">outbound_secret_blocked</option><option value="risk_escalation_block">risk_escalation_block</option></select>
+<input id="since-input" type="datetime-local" title="Since (start time)">
+<input id="session-input" placeholder="Session..." type="text" title="Filter by session ID">
 <input id="search-input" class="search-input" placeholder="Search..." type="text">
 <button id="refresh-btn">Refresh</button>
 <label class="auto-refresh"><input type="checkbox" id="auto-refresh-cb">Auto (5s)</label>
@@ -254,6 +256,10 @@ async function loadBlocks() {
     params.set('limit', '50');
     const ev = $('#event-filter').value;
     if (ev) params.set('event', ev);
+    const since = $('#since-input').value;
+    if (since) params.set('since', new Date(since).toISOString());
+    const sess = $('#session-input').value.trim();
+    if (sess) params.set('session', sess);
     const q = $('#search-input').value.trim();
     if (q) params.set('q', q);
     if (currentCursor) params.set('cursor', currentCursor);
@@ -267,6 +273,8 @@ async function loadBlocks() {
 
 $('#refresh-btn').onclick = () => { cursorStack = []; currentCursor = undefined; loadBlocks(); };
 $('#event-filter').onchange = () => { cursorStack = []; currentCursor = undefined; loadBlocks(); };
+$('#since-input').onchange = () => { cursorStack = []; currentCursor = undefined; loadBlocks(); };
+$('#session-input').onkeydown = e => { if (e.key === 'Enter') { cursorStack = []; currentCursor = undefined; loadBlocks(); } };
 $('#search-input').onkeydown = e => { if (e.key === 'Enter') { cursorStack = []; currentCursor = undefined; loadBlocks(); } };
 $('#page-older').onclick = () => {
   const next = $('#page-older').dataset.cursor;

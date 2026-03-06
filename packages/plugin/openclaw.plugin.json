@@ -23,6 +23,12 @@
           "openclaw.json", "AGENTS.md", "SOUL.md", "auth-profiles.json"
         ]
       },
+      "protectedPathExceptions": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": [],
+        "description": "Exact canonical paths exempted from protectedPathPatterns (set by Dashboard allow)"
+      },
       "execAllowedPrefixes": {
         "type": "array",
         "items": { "type": "string" },

@@ -34,6 +34,12 @@ input:focus,select:focus{outline:none;border-color:var(--accent)}
 header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface)}
 header h1{font-size:16px;font-weight:600}
 .token-display{font-family:var(--mono);font-size:12px;color:var(--text-muted);cursor:pointer}
+.component-strip{display:flex;gap:8px;flex-wrap:wrap;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border)}
+.component-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;font-size:12px;background:#111824}
+.component-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.component-dot.online{background:var(--success);box-shadow:0 0 0 2px rgba(63,185,80,.25)}
+.component-dot.offline{background:var(--danger);box-shadow:0 0 0 2px rgba(248,81,73,.25)}
+.component-state{font-family:var(--mono);font-size:11px;color:var(--text-muted)}
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--surface);padding:0 20px}
 .tab-btn{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;padding:10px 16px;color:var(--text-muted);font-size:14px}
 .tab-btn:hover{color:var(--text)}
@@ -77,7 +83,7 @@ tr:hover{background:rgba(88,166,255,.04)}
 .status-msg.success{display:block;background:#1f3a2e;color:var(--success);border:1px solid var(--success)}
 .status-msg.warn{display:block;background:#3d2c10;color:var(--warning);border:1px solid var(--warning)}
 .detail-cell{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:768px){.filters{flex-direction:column}.detail-cell{max-width:180px}header{flex-direction:column;gap:8px}}
+@media(max-width:768px){.filters{flex-direction:column}.detail-cell{max-width:180px}header{flex-direction:column;gap:8px}.component-strip{padding:10px 12px}}
 .hidden{display:none!important}
 .config-rev{margin-left:auto;font-size:12px;color:var(--text-muted)}
 .mt-8{margin-top:8px}
@@ -97,6 +103,7 @@ tr:hover{background:rgba(88,166,255,.04)}
 <h1>PRISM Security Dashboard</h1>
 <span class="token-display" id="token-display" title="Click to re-enter token"></span>
 </header>
+<div class="component-strip" id="component-strip"></div>
 
 <nav class="tabs">
 <button class="tab-btn active" data-tab="blocks">Blocks</button>
@@ -152,6 +159,7 @@ let currentCursor = undefined;
 let configData = null;
 let configDirty = {};
 let autoTimer = null;
+let componentTimer = null;
 
 /* ── Auth ── */
 function showAuth() { $('#auth-modal').classList.remove('hidden'); }
@@ -166,6 +174,7 @@ $('#connect-btn').onclick = () => {
   if (!token) return;
   sessionStorage.setItem('prism_token', token);
   updateTokenDisplay();
+  loadComponentStatuses();
   loadBlocks();
   loadConfig();
 };
@@ -254,6 +263,51 @@ function renderBlocks(data) {
   }
   $('#page-older').classList.toggle('hidden', !data.hasMore);
   $('#page-newer').classList.toggle('hidden', cursorStack.length === 0);
+}
+
+function renderComponentStatuses(data) {
+  const strip = $('#component-strip');
+  strip.innerHTML = '';
+  const components = Array.isArray(data?.components) ? data.components : [];
+  if (components.length === 0) {
+    const empty = ce('span');
+    empty.className = 'component-state';
+    empty.textContent = 'components: unavailable';
+    strip.appendChild(empty);
+    return;
+  }
+
+  for (const component of components) {
+    const chip = ce('div');
+    chip.className = 'component-chip';
+    const dot = ce('span');
+    dot.className = 'component-dot ' + (component.ok ? 'online' : 'offline');
+    const name = ce('span');
+    name.textContent = component.name;
+    const state = ce('span');
+    state.className = 'component-state';
+    state.textContent = component.ok ? 'online' : 'offline';
+    chip.title = (component.url || component.name) + (component.detail ? ' · ' + component.detail : '');
+    chip.append(dot, name, state);
+    strip.appendChild(chip);
+  }
+}
+
+async function loadComponentStatuses() {
+  if (!token) return;
+  try {
+    const data = await api('/api/components/status');
+    renderComponentStatuses(data);
+  } catch {
+    renderComponentStatuses({ components: [] });
+  }
+}
+
+function startComponentPolling() {
+  if (componentTimer) clearInterval(componentTimer);
+  componentTimer = setInterval(() => {
+    if (token) loadComponentStatuses();
+  }, 5000);
 }
 
 async function loadBlocks() {
@@ -540,7 +594,8 @@ function showStatus(id, msg, type) {
 
 /* ── Init ── */
 updateTokenDisplay();
-if (token) { loadBlocks(); loadConfig(); }
+startComponentPolling();
+if (token) { loadComponentStatuses(); loadBlocks(); loadConfig(); }
 })();
 </script>
 </body>

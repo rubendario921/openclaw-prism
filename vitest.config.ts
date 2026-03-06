@@ -8,10 +8,12 @@ export default defineConfig({
     alias: [
       { find: /^@kyaclaw\/shared\/heuristics$/, replacement: fromRoot("./packages/shared/src/heuristics.ts") },
       { find: /^@kyaclaw\/shared\/audit$/, replacement: fromRoot("./packages/shared/src/audit.ts") },
+      { find: /^@kyaclaw\/shared\/paths$/, replacement: fromRoot("./packages/shared/src/paths.ts") },
       { find: /^@kyaclaw\/shared\/types$/, replacement: fromRoot("./packages/shared/src/types.ts") },
       { find: /^@kyaclaw\/shared$/, replacement: fromRoot("./packages/shared/src/index.ts") },
       { find: /^@kyaclaw\/proxy\/policy$/, replacement: fromRoot("./packages/proxy/src/policy.ts") },
       { find: /^@kyaclaw\/proxy$/, replacement: fromRoot("./packages/proxy/src/index.ts") },
+      { find: /^@kyaclaw\/dashboard$/, replacement: fromRoot("./packages/dashboard/src/index.ts") },
     ],
   },
   test: {

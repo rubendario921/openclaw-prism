@@ -23,4 +23,6 @@ export type SecurityConfig = {
   scannerTimeoutMs?: number;
   blockOnScannerFailure?: boolean;
   outboundSecretPatterns?: string[];
+  /** Exact canonical paths exempted from protectedPathPatterns (set by Dashboard allow). */
+  protectedPathExceptions?: string[];
 };

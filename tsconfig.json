@@ -20,6 +20,7 @@
     { "path": "packages/scanner" },
     { "path": "packages/proxy" },
     { "path": "packages/monitor" },
-    { "path": "packages/cli" }
+    { "path": "packages/cli" },
+    { "path": "packages/dashboard" }
   ]
 }

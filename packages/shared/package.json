@@ -7,10 +7,11 @@
     ".": "./dist/index.js",
     "./types": "./dist/types.js",
     "./heuristics": "./dist/heuristics.js",
-    "./audit": "./dist/audit.js"
+    "./audit": "./dist/audit.js",
+    "./paths": "./dist/paths.js"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/types.ts src/heuristics.ts src/audit.ts --format esm",
+    "build": "tsup src/index.ts src/types.ts src/heuristics.ts src/audit.ts src/paths.ts --format esm",
     "clean": "rm -rf dist"
   }
 }

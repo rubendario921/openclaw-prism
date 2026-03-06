@@ -40,10 +40,10 @@ program
 // ── start command ──
 program
   .command("start")
-  .argument("[service]", "Service to start: scanner, proxy, monitor, or all", "all")
+  .argument("[service]", "Service to start: scanner, proxy, monitor, dashboard, or all", "all")
   .description("Start PRISM security services")
   .action((service: string) => {
-    const services = service === "all" ? ["scanner", "proxy", "monitor"] : [service];
+    const services = service === "all" ? ["scanner", "proxy", "monitor", "dashboard"] : [service];
     for (const svc of services) {
       const envKey = `PRISM_${svc.toUpperCase()}_START`;
       process.stdout.write(`[prism] starting ${svc}...\n`);
@@ -58,6 +58,9 @@ program
           break;
         case "monitor":
           modulePath = "@kyaclaw/monitor";
+          break;
+        case "dashboard":
+          modulePath = "@kyaclaw/dashboard";
           break;
         default:
           process.stderr.write(`[prism] unknown service: ${svc}\n`);
@@ -83,6 +86,7 @@ program
     const checks = [
       { name: "scanner", url: "http://127.0.0.1:18766/healthz" },
       { name: "proxy", url: "http://127.0.0.1:18767/healthz" },
+      { name: "dashboard", url: "http://127.0.0.1:18768/healthz" },
     ];
 
     for (const { name, url } of checks) {

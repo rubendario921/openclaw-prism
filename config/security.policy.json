@@ -27,6 +27,7 @@
   "scannerUrl": "http://127.0.0.1:18766/scan",
   "scannerTimeoutMs": 900,
   "blockOnScannerFailure": false,
+  "protectedPathExceptions": [],
   "outboundSecretPatterns": [
     "AKIA[0-9A-Z]{16}",
     "-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----",

@@ -1,10 +1,16 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, readFileSync, renameSync, writeFileSync,
+  watchFile, unwatchFile,
+} from "node:fs";
+import http from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { heuristicScan } from "@kyaclaw/shared/heuristics";
 import { auditLog } from "@kyaclaw/shared/audit";
 import type { SessionRisk, ScanVerdict, SecurityConfig } from "@kyaclaw/shared/types";
+import { canonicalizePath } from "@kyaclaw/shared/paths";
 
 // ── Session risk accumulation ──
 const riskBySession = new Map<string, SessionRisk>();
@@ -63,7 +69,6 @@ function sweepExpired(): number {
 function startSweepTimer(): void {
   if (sweepTimer) return;
   sweepTimer = setInterval(sweepExpired, SWEEP_INTERVAL_MS);
-  // Allow process to exit even if timer is active
   if (sweepTimer && typeof sweepTimer === "object" && "unref" in sweepTimer) {
     sweepTimer.unref();
   }
@@ -438,20 +443,45 @@ async function scanRemote(url: string, text: string, timeoutMs: number): Promise
   }
 }
 
-// ── Plugin registration ──
+// ── RuntimeConfig: hot-reloadable security configuration ──
+
+type RuntimeConfig = {
+  riskTtlMs: number;
+  maxScanChars: number;
+  scanTools: Set<string>;
+  protectedPaths: string[];
+  protectedPathExceptions: Set<string>;
+  execAllowed: Set<string>;
+  execBlocked: RegExp[];
+  scannerUrl: string;
+  scannerTimeoutMs: number;
+  blockOnScannerFailure: boolean;
+  outboundSecrets: RegExp[];
+};
+
+// ── Module-level mutable state ──
+// ⚠️ All mutable state lives here — NOT inside register().
+// register() reads and writes moduleState; hooks read moduleState.runtimeCfg.
+// This is critical for hot-reload: watchFile callback replaces runtimeCfg
+// and all hooks immediately see the new config on next invocation.
+
+const moduleState = {
+  runtimeCfg: null as RuntimeConfig | null,
+  configFilePath: null as string | null,
+  debounceTimer: null as ReturnType<typeof setTimeout> | null,
+  cleanupHookRegistered: false,
+  internalServer: null as http.Server | null,
+  api: null as OpenClawPluginApi | null,
+};
+
+// ── Config building ──
+
 const HIGH_RISK_TOOLS = new Set([
   "exec", "bash", "write", "edit", "apply_patch", "gateway", "nodes", "browser",
 ]);
 const DEFAULT_SCAN_TOOLS = new Set(["web_fetch", "browser"]);
 
-export default function register(api: OpenClawPluginApi) {
-  const cfg = (api.pluginConfig ?? {}) as SecurityConfig;
-  riskPersistenceEnabled = cfg.persistRiskState !== false;
-  riskStateFilePath = resolveRiskStatePath(
-    cfg.riskStateFile ?? process.env.PRISM_RISK_STATE_FILE,
-  );
-  const riskTtlMs = cfg.riskTtlMs ?? 180_000;
-  const maxScan = cfg.maxScanChars ?? 20_000;
+function buildRuntimeConfig(cfg: SecurityConfig): RuntimeConfig {
   const scanTools = new Set(
     (cfg.scanTools ?? [...DEFAULT_SCAN_TOOLS]).map(normalizeToolName),
   );
@@ -459,6 +489,9 @@ export default function register(api: OpenClawPluginApi) {
     "/etc/*", "/root/*", "/home/*/.ssh/*", "*.env",
     "openclaw.json", "AGENTS.md", "SOUL.md", "auth-profiles.json",
   ];
+  const protectedPathExceptions = new Set(
+    (cfg.protectedPathExceptions ?? []).map(p => p.trim()).filter(Boolean),
+  );
   const execAllowed = new Set(
     (cfg.execAllowedPrefixes ?? [
       "node", "npm", "npx", "bun", "bunx", "python3", "python", "pip",
@@ -478,8 +511,6 @@ export default function register(api: OpenClawPluginApi) {
       try { return new RegExp(p, "i"); } catch { return null; }
     })
     .filter(Boolean) as RegExp[];
-  const scannerUrl = cfg.scannerUrl || "http://127.0.0.1:18766/scan";
-  const scannerTimeout = cfg.scannerTimeoutMs ?? 900;
   const outboundSecrets = (cfg.outboundSecretPatterns ?? [
     "AKIA[0-9A-Z]{16}", "-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----",
     "xox[baprs]-[0-9A-Za-z-]{10,}", "ghp_[0-9A-Za-z]{30,}", "sk-[A-Za-z0-9]{20,}",
@@ -489,32 +520,257 @@ export default function register(api: OpenClawPluginApi) {
     })
     .filter(Boolean) as RegExp[];
 
+  return {
+    riskTtlMs: cfg.riskTtlMs ?? 180_000,
+    maxScanChars: cfg.maxScanChars ?? 20_000,
+    scanTools,
+    protectedPaths,
+    protectedPathExceptions,
+    execAllowed,
+    execBlocked,
+    scannerUrl: cfg.scannerUrl || "http://127.0.0.1:18766/scan",
+    scannerTimeoutMs: cfg.scannerTimeoutMs ?? 900,
+    blockOnScannerFailure: cfg.blockOnScannerFailure ?? false,
+    outboundSecrets,
+  };
+}
+
+function loadConfigFile(filePath: string): SecurityConfig | null {
+  try {
+    if (!existsSync(filePath)) return null;
+    const raw = readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as SecurityConfig;
+  } catch {
+    return null;
+  }
+}
+
+/** Safe accessor: throws if runtimeCfg is not yet initialized. */
+function getCfg(): RuntimeConfig {
+  if (!moduleState.runtimeCfg) {
+    throw new Error("[security] runtimeCfg not initialized — register() not called");
+  }
+  return moduleState.runtimeCfg;
+}
+
+// ── Cleanup ──
+// ⚠️ Must be at module level, NOT inside register().
+
+function cleanupAll(): void {
+  if (moduleState.configFilePath) {
+    try { unwatchFile(moduleState.configFilePath); } catch { /* ignore */ }
+  }
+  if (moduleState.debounceTimer) {
+    clearTimeout(moduleState.debounceTimer);
+    moduleState.debounceTimer = null;
+  }
+  if (moduleState.internalServer) {
+    try { moduleState.internalServer.close(); } catch { /* ignore */ }
+    moduleState.internalServer = null;
+  }
+  stopSweepTimer();
+}
+
+// ── Internal audit endpoint ──
+// Single-writer principle: audit.jsonl is exclusively written by the gateway/plugin process.
+// Dashboard delegates audit writes via POST /internal/audit (loopback only, separate token).
+
+const INTERNAL_PORT = Number(process.env.PRISM_INTERNAL_PORT ?? "18769");
+const INTERNAL_MAX_BODY = 4096; // 4KB
+const INTERNAL_RATE_LIMIT = 10; // requests per second
+
+// Allowed dashboard audit events — nothing else passes through.
+const AUDIT_EVENT_WHITELIST = new Set([
+  "dashboard_auth_failed",
+  "dashboard_config_updated",
+  "dashboard_allow_applied",
+]);
+
+// Allowed fields per event type (event field itself is always required).
+const AUDIT_EVENT_FIELDS: Record<string, Set<string>> = {
+  dashboard_auth_failed: new Set(["event", "ip"]),
+  dashboard_config_updated: new Set(["event", "revision", "changedFields"]),
+  dashboard_allow_applied: new Set(["event", "actionType", "value", "revision", "sourceCursor"]),
+};
+
+// Token bucket rate limiter
+const auditBucket = { tokens: INTERNAL_RATE_LIMIT, lastRefill: Date.now() };
+
+function consumeAuditToken(): boolean {
+  const now = Date.now();
+  const elapsed = (now - auditBucket.lastRefill) / 1000;
+  auditBucket.tokens = Math.min(INTERNAL_RATE_LIMIT, auditBucket.tokens + elapsed * INTERNAL_RATE_LIMIT);
+  auditBucket.lastRefill = now;
+  if (auditBucket.tokens >= 1) {
+    auditBucket.tokens--;
+    return true;
+  }
+  return false;
+}
+
+function isLoopback(addr: string | undefined): boolean {
+  if (!addr) return false;
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+function digestToken(token: string): Buffer {
+  return createHash("sha256").update(token, "utf8").digest();
+}
+
+function internalTokenMatches(expected: string, provided: string): boolean {
+  return timingSafeEqual(digestToken(expected), digestToken(provided));
+}
+
+function readBearerToken(req: http.IncomingMessage): string {
+  const raw = String(req.headers["authorization"] ?? "");
+  if (!raw.toLowerCase().startsWith("bearer ")) return "";
+  return raw.slice(7).trim();
+}
+
+function jsonResponse(res: http.ServerResponse, status: number, payload: unknown) {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+function startInternalAuditServer(api: OpenClawPluginApi): void {
+  const token = process.env.PRISM_INTERNAL_TOKEN ?? "";
+  if (!token) {
+    api.logger?.warn?.("[security] PRISM_INTERNAL_TOKEN not set — internal audit endpoint disabled");
+    return;
+  }
+
+  const server = http.createServer((req, res) => {
+    // Loopback enforcement — BEFORE auth (plan §9: security table)
+    if (!isLoopback(req.socket.remoteAddress)) {
+      return jsonResponse(res, 403, { error: "loopback_only" });
+    }
+
+    // Only POST /internal/audit
+    if (req.method !== "POST" || req.url !== "/internal/audit") {
+      return jsonResponse(res, 404, { error: "not found" });
+    }
+
+    // Auth
+    const provided = readBearerToken(req);
+    if (!provided || !internalTokenMatches(token, provided)) {
+      return jsonResponse(res, 401, { error: "unauthorized" });
+    }
+
+    // Rate limit
+    if (!consumeAuditToken()) {
+      return jsonResponse(res, 429, { error: "rate_limit_exceeded" });
+    }
+
+    // Read body with size limit
+    let raw = "";
+    let destroyed = false;
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > INTERNAL_MAX_BODY && !destroyed) {
+        destroyed = true;
+        jsonResponse(res, 413, { error: "body_too_large" });
+        req.destroy();
+      }
+    });
+
+    req.on("end", () => {
+      if (destroyed) return;
+      try {
+        const body = JSON.parse(raw || "{}") as Record<string, unknown>;
+
+        // Validate event is in whitelist
+        const event = body.event;
+        if (typeof event !== "string" || !AUDIT_EVENT_WHITELIST.has(event)) {
+          return jsonResponse(res, 400, { error: "invalid_event", allowed: [...AUDIT_EVENT_WHITELIST] });
+        }
+
+        // Reject unknown fields (prevent injection of unexpected audit fields)
+        const allowedFields = AUDIT_EVENT_FIELDS[event];
+        if (allowedFields) {
+          for (const key of Object.keys(body)) {
+            if (!allowedFields.has(key)) {
+              return jsonResponse(res, 400, { error: "unknown_field", field: key });
+            }
+          }
+        }
+
+        // Write via auditLog (maintains HMAC chain integrity)
+        auditLog(body);
+        return jsonResponse(res, 200, { ok: true });
+      } catch {
+        return jsonResponse(res, 400, { error: "invalid_json" });
+      }
+    });
+  });
+
+  server.listen(INTERNAL_PORT, "127.0.0.1", () => {
+    api.logger?.info?.(`[security] internal audit endpoint http://127.0.0.1:${INTERNAL_PORT}/internal/audit`);
+  });
+
+  server.on("error", (err) => {
+    api.logger?.warn?.(`[security] internal audit server failed: ${err.message}`);
+  });
+
+  // Unref so this server doesn't prevent process exit
+  server.unref();
+  moduleState.internalServer = server;
+}
+
+// ── Plugin registration ──
+
+export default function register(api: OpenClawPluginApi) {
+  moduleState.api = api;
+
+  // ── Load config: PRISM_SECURITY_POLICY file takes precedence over api.pluginConfig ──
+  const configPath = process.env.PRISM_SECURITY_POLICY?.trim() || "";
+  let cfg: SecurityConfig;
+
+  if (configPath) {
+    moduleState.configFilePath = isAbsolute(configPath)
+      ? configPath
+      : resolve(process.cwd(), configPath);
+    const fileCfg = loadConfigFile(moduleState.configFilePath);
+    cfg = fileCfg ?? ((api.pluginConfig ?? {}) as SecurityConfig);
+    if (fileCfg) {
+      api.logger?.info?.(`[security] loaded config from ${moduleState.configFilePath}`);
+    } else {
+      api.logger?.warn?.(`[security] ${moduleState.configFilePath} not found, using pluginConfig fallback`);
+    }
+  } else {
+    cfg = (api.pluginConfig ?? {}) as SecurityConfig;
+  }
+
+  moduleState.runtimeCfg = buildRuntimeConfig(cfg);
+
+  // ── Risk persistence setup (one-time, not hot-reloaded) ──
+  riskPersistenceEnabled = cfg.persistRiskState !== false;
+  riskStateFilePath = resolveRiskStatePath(
+    cfg.riskStateFile ?? process.env.PRISM_RISK_STATE_FILE,
+  );
+
   // ── Hook 1: message_received → inbound injection early-warning ──
-  // Context: PluginHookMessageContext { channelId, accountId?, conversationId? }
-  // Stores risk under conversationId (per-conversation scope).
-  // This feeds message-level hooks (message_sending DLP). Agent-level risk is set
-  // independently by before_prompt_build to avoid channel-wide contamination.
   api.on("message_received", (event, ctx) => {
-    const text = String(event.content ?? "").slice(0, maxScan);
+    const rc = getCfg();
+    const text = String(event.content ?? "").slice(0, rc.maxScanChars);
     const scan = heuristicScan(text);
     if (scan.suspicious && ctx.conversationId) {
-      bumpRisk(ctx.conversationId, scan.reasons, riskTtlMs, 10);
+      bumpRisk(ctx.conversationId, scan.reasons, rc.riskTtlMs, 10);
       auditLog({ event: "inbound_injection_signal", reasons: scan.reasons, conversation: ctx.conversationId });
     }
   });
 
   // ── Hook 2: before_prompt_build → independent prompt scan + session risk ──
-  // Context: PluginHookAgentContext { sessionKey?, channelId?, ... }
-  // Event: { prompt, messages }
-  // Scans the current prompt directly and bumps sessionKey risk — no cross-context bridging.
-  // channelId is a channel-type identifier (e.g. "telegram") shared by all users on that
-  // channel, so we never use it as a risk key to avoid cross-session contamination.
   api.on("before_prompt_build", (event, ctx) => {
+    const rc = getCfg();
     if (ctx.sessionKey) {
-      const promptText = String(event.prompt ?? "").slice(0, maxScan);
+      const promptText = String(event.prompt ?? "").slice(0, rc.maxScanChars);
       const scan = heuristicScan(promptText);
       if (scan.suspicious) {
-        bumpRisk(ctx.sessionKey, scan.reasons, riskTtlMs, 10);
+        bumpRisk(ctx.sessionKey, scan.reasons, rc.riskTtlMs, 10);
         auditLog({ event: "prompt_injection_signal", reasons: scan.reasons, session: ctx.sessionKey });
       }
     }
@@ -529,8 +785,8 @@ export default function register(api: OpenClawPluginApi) {
   });
 
   // ── Hook 3: before_tool_call → core active interception ──
-  // Context: PluginHookToolContext (has sessionKey)
   api.on("before_tool_call", (event, ctx) => {
+    const rc = getCfg();
     const tool = normalizeToolName(event.toolName);
     const params = event.params ?? {};
 
@@ -557,13 +813,13 @@ export default function register(api: OpenClawPluginApi) {
         const firstWord = firstExecutable(command);
 
         // Whitelist check
-        if (!firstWord || !execAllowed.has(firstWord)) {
+        if (!firstWord || !rc.execAllowed.has(firstWord)) {
           auditLog({ event: "exec_whitelist_block", command: command.slice(0, 200), session: ctx.sessionKey });
           return { block: true, blockReason: `[security] command "${firstWord}" not in whitelist` };
         }
 
         // Blacklist pattern check
-        for (const re of execBlocked) {
+        for (const re of rc.execBlocked) {
           if (re.test(command)) {
             auditLog({ event: "exec_pattern_block", pattern: re.source, session: ctx.sessionKey });
             return { block: true, blockReason: `[security] blocked dangerous pattern: ${re.source.slice(0, 60)}` };
@@ -572,19 +828,32 @@ export default function register(api: OpenClawPluginApi) {
       }
     }
 
-    // File path protection
+    // File path protection (with protectedPathExceptions support)
     if (["write", "edit", "apply_patch", "read"].includes(tool)) {
       const cwd = firstStringParam(params, "cwd");
       for (const p of collectPaths(params)) {
-        if (isProtectedPath(p, protectedPaths, cwd)) {
-          auditLog({ event: "path_block", tool, path: p, session: ctx.sessionKey });
+        // Check exceptions first: canonicalize path and check against exception set
+        const canonical = canonicalizePath(p, cwd || "/");
+        if (rc.protectedPathExceptions.has(canonical)) {
+          continue; // Exempted by Dashboard allow — skip block
+        }
+
+        if (isProtectedPath(p, rc.protectedPaths, cwd)) {
+          // Audit record stores rawPath + cwd for Dashboard to reconstruct canonical path
+          auditLog({
+            event: "path_block",
+            tool,
+            rawPath: p,
+            cwd: cwd || undefined,
+            session: ctx.sessionKey,
+          });
           return { block: true, blockReason: `[security] protected path: ${p}` };
         }
       }
     }
 
     // Private network URL block
-    if (scanTools.has(tool)) {
+    if (rc.scanTools.has(tool)) {
       const url = firstStringParam(params, "url", "target", "href");
       if (
         url &&
@@ -598,16 +867,17 @@ export default function register(api: OpenClawPluginApi) {
 
   // ── Hook 4: after_tool_call → async ML scan + risk accumulation ──
   api.on("after_tool_call", async (event, ctx) => {
-    if (!scanTools.has(normalizeToolName(event.toolName))) return;
-    const text = extractText(event.result, maxScan);
+    const rc = getCfg();
+    if (!rc.scanTools.has(normalizeToolName(event.toolName))) return;
+    const text = extractText(event.result, rc.maxScanChars);
     const local = heuristicScan(text);
     if (!local.suspicious) return;
 
     try {
-      const verdict = await scanRemote(scannerUrl, text, scannerTimeout);
+      const verdict = await scanRemote(rc.scannerUrl, text, rc.scannerTimeoutMs);
       if (verdict.verdict === "malicious" || verdict.verdict === "suspicious") {
         const delta = verdict.verdict === "malicious" ? 30 : 15;
-        bumpRisk(ctx.sessionKey!, verdict.reasons, riskTtlMs, delta);
+        bumpRisk(ctx.sessionKey!, verdict.reasons, rc.riskTtlMs, delta);
         auditLog({
           event: "tool_result_injection",
           tool: event.toolName,
@@ -617,15 +887,16 @@ export default function register(api: OpenClawPluginApi) {
         });
       }
     } catch {
-      bumpRisk(ctx.sessionKey!, ["scanner-failure"], riskTtlMs, 10);
+      bumpRisk(ctx.sessionKey!, ["scanner-failure"], rc.riskTtlMs, 10);
     }
   });
 
   // ── Hook 5: tool_result_persist → synchronous result sanitization ──
   api.on("tool_result_persist", (event) => {
+    const rc = getCfg();
     const tool = normalizeToolName(event.toolName ?? "");
-    if (!scanTools.has(tool)) return { message: event.message };
-    const text = extractText(event.message, maxScan);
+    if (!rc.scanTools.has(tool)) return { message: event.message };
+    const text = extractText(event.message, rc.maxScanChars);
     const scan = heuristicScan(text);
     if (!scan.suspicious) return { message: event.message };
     auditLog({ event: "result_redacted", tool, reasons: scan.reasons });
@@ -634,25 +905,23 @@ export default function register(api: OpenClawPluginApi) {
 
   // ── Hook 6: before_message_write → last-hop write defense ──
   api.on("before_message_write", (event) => {
-    const text = extractText(event.message, maxScan);
+    const rc = getCfg();
+    const text = extractText(event.message, rc.maxScanChars);
     const scan = heuristicScan(text);
     if (!scan.suspicious) return;
     return { message: redactMessage(event.message, scan.reasons) as any };
   });
 
   // ── Hook 7: message_sending → outbound DLP + conversation risk check ──
-  // Context: PluginHookMessageContext { channelId, accountId?, conversationId? }
-  // Also checks conversationId risk (set by message_received) — this gives
-  // conversation-scoped entries a read/consumption path.
   api.on("message_sending", (event, ctx) => {
+    const rc = getCfg();
     const content = String(event.content ?? "");
-    for (const re of outboundSecrets) {
+    for (const re of rc.outboundSecrets) {
       if (re.test(content)) {
         auditLog({ event: "outbound_secret_blocked", pattern: re.source.slice(0, 40) });
         return { cancel: true, content: "[security] message blocked: credential pattern detected" };
       }
     }
-    // Block outbound if conversation has elevated injection risk
     const convRisk = getSessionRisk(ctx.conversationId);
     if (convRisk && convRisk.score >= 20) {
       auditLog({ event: "outbound_risk_block", conversation: ctx.conversationId, risk: convRisk.score });
@@ -676,19 +945,51 @@ export default function register(api: OpenClawPluginApi) {
     }
   });
 
-  // ── Hook 10: gateway_start → startup self-check + start periodic sweep ──
+  // ── Hook 10: gateway_start → startup self-check + sweep + hot-reload + internal audit ──
   api.on("gateway_start", () => {
+    // Restore persisted risk state
     if (riskPersistenceEnabled) {
       const loaded = loadRiskStateFromFile(riskStateFilePath, riskBySession);
       if (loaded > 0) {
         api.logger?.info?.(`[security] restored ${loaded} risk entries from ${riskStateFilePath}`);
       }
-      // Persist after startup to compact expired/invalid entries immediately.
       persistRiskStateIfEnabled();
     }
     startSweepTimer();
+
+    // Hot-reload: watch config file for changes (fs.watchFile = polling, survives atomic write)
+    if (moduleState.configFilePath) {
+      watchFile(moduleState.configFilePath, { interval: 2000 }, () => {
+        // Debounce: 300ms after last change notification
+        if (moduleState.debounceTimer) clearTimeout(moduleState.debounceTimer);
+        moduleState.debounceTimer = setTimeout(() => {
+          const newCfg = loadConfigFile(moduleState.configFilePath!);
+          if (newCfg) {
+            moduleState.runtimeCfg = buildRuntimeConfig(newCfg);
+            auditLog({ event: "security_config_reloaded", path: moduleState.configFilePath });
+            api.logger?.info?.("[security] config hot-reloaded");
+          } else {
+            auditLog({ event: "security_config_reload_failed", path: moduleState.configFilePath });
+            api.logger?.warn?.("[security] config reload failed, keeping previous config");
+          }
+        }, 300);
+      });
+      api.logger?.info?.(`[security] watching config ${moduleState.configFilePath} for changes`);
+    }
+
+    // Start internal audit endpoint (for Dashboard single-writer delegation)
+    startInternalAuditServer(api);
+
     api.logger?.info?.("[security] openclaw-prism security plugin active — all hooks registered");
   });
+
+  // ── Passive cleanup: only on process 'exit' (guest plugin, never calls process.exit) ──
+  // ⚠️ Uses process.once + moduleState guard to prevent double registration.
+  if (!moduleState.cleanupHookRegistered) {
+    moduleState.cleanupHookRegistered = true;
+    process.once("exit", cleanupAll);
+  }
+  // Note: no SIGTERM/SIGINT handler — plugin is a guest, must not hijack host exit semantics.
 }
 
 // Export internals for testing
@@ -701,3 +1002,5 @@ export {
   isProtectedPath, parseExecCommand, firstExecutable, execTrampolineReason,
   hasShellMetacharacters, extractText, redactMessage,
 };
+export { buildRuntimeConfig, loadConfigFile, moduleState, cleanupAll };
+export type { RuntimeConfig };

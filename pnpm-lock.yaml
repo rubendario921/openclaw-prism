@@ -36,6 +36,12 @@ importers:
         specifier: ^4
         version: 4.21.0
 
+  packages/dashboard:
+    dependencies:
+      '@kyaclaw/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   packages/monitor:
     dependencies:
       '@kyaclaw/shared':

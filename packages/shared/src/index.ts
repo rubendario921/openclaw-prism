@@ -1,3 +1,4 @@
 export type { ScanVerdict, SessionRisk, SecurityConfig } from "./types.js";
 export { heuristicScan, canonicalizeText, INJECTION_PATTERNS } from "./heuristics.js";
 export { auditLog, verifyAuditEntry, verifyAuditChain, verifyAuditAnchors } from "./audit.js";
+export { canonicalizePath } from "./paths.js";

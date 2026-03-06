@@ -74,6 +74,8 @@ if [ ! -f "$ENV_FILE" ]; then
   HMAC_KEY=$(openssl rand -hex 32)
   PROXY_TOKEN=$(openssl rand -hex 32)
   SCANNER_TOKEN=$(openssl rand -hex 32)
+  DASHBOARD_TOKEN=$(openssl rand -hex 32)
+  INTERNAL_TOKEN=$(openssl rand -hex 32)
 
   # Auto-detect gateway token from openclaw.json
   GATEWAY_TOKEN=""
@@ -109,11 +111,30 @@ OLLAMA_MODEL=qwen3:30b
 
 # Proxy config
 INVOKE_GUARD_POLICY=$INSTALL_DIR/config/invoke-guard.policy.json
+
+# Dashboard config
+PRISM_DASHBOARD_TOKEN=$DASHBOARD_TOKEN
+DASHBOARD_HOST=127.0.0.1
+DASHBOARD_PORT=18768
+
+# Plugin internal audit endpoint (used by Dashboard for single-writer delegation)
+PRISM_INTERNAL_TOKEN=$INTERNAL_TOKEN
+PRISM_INTERNAL_PORT=18769
+
+# Security policy (hot-reloadable by Plugin)
+PRISM_SECURITY_POLICY=$SECURITY_DIR/security.policy.json
 EOF
 
   # Update policy with generated token
   sed -i "s/replace-with-long-random-token/$PROXY_TOKEN/" "$INSTALL_DIR/config/invoke-guard.policy.json" 2>/dev/null || \
   sed -i '' "s/replace-with-long-random-token/$PROXY_TOKEN/" "$INSTALL_DIR/config/invoke-guard.policy.json"
+
+  # Copy default security policy to security dir (hot-reloadable by Plugin)
+  if [ ! -f "$SECURITY_DIR/security.policy.json" ]; then
+    mkdir -p "$SECURITY_DIR"
+    cp "$INSTALL_DIR/config/security.policy.json" "$SECURITY_DIR/security.policy.json"
+    echo "  Copied default security policy to $SECURITY_DIR/security.policy.json"
+  fi
 
   echo "  Generated new secrets in $ENV_FILE"
 else
@@ -138,6 +159,31 @@ else
     SCANNER_TOKEN=$(openssl rand -hex 32)
     echo "SCANNER_AUTH_TOKEN=$SCANNER_TOKEN" >> "$ENV_FILE"
     echo "  Added missing SCANNER_AUTH_TOKEN."
+  fi
+  if ! grep -q "^PRISM_DASHBOARD_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+    DASHBOARD_TOKEN=$(openssl rand -hex 32)
+    echo "" >> "$ENV_FILE"
+    echo "# Dashboard config (added on upgrade)" >> "$ENV_FILE"
+    echo "PRISM_DASHBOARD_TOKEN=$DASHBOARD_TOKEN" >> "$ENV_FILE"
+    echo "DASHBOARD_HOST=127.0.0.1" >> "$ENV_FILE"
+    echo "DASHBOARD_PORT=18768" >> "$ENV_FILE"
+    echo "  Added missing PRISM_DASHBOARD_TOKEN."
+  fi
+  if ! grep -q "^PRISM_INTERNAL_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+    INTERNAL_TOKEN=$(openssl rand -hex 32)
+    echo "PRISM_INTERNAL_TOKEN=$INTERNAL_TOKEN" >> "$ENV_FILE"
+    echo "PRISM_INTERNAL_PORT=18769" >> "$ENV_FILE"
+    echo "  Added missing PRISM_INTERNAL_TOKEN."
+  fi
+  if ! grep -q "^PRISM_SECURITY_POLICY=" "$ENV_FILE" 2>/dev/null; then
+    echo "PRISM_SECURITY_POLICY=$SECURITY_DIR/security.policy.json" >> "$ENV_FILE"
+    echo "  Added missing PRISM_SECURITY_POLICY."
+  fi
+  # Ensure security policy file exists
+  if [ ! -f "$SECURITY_DIR/security.policy.json" ]; then
+    mkdir -p "$SECURITY_DIR"
+    cp "$INSTALL_DIR/config/security.policy.json" "$SECURITY_DIR/security.policy.json"
+    echo "  Copied default security policy to $SECURITY_DIR/"
   fi
 fi
 
@@ -199,7 +245,7 @@ if [ -d /etc/systemd/system ] && command -v systemctl &>/dev/null; then
   echo "  Installing systemd services..."
 
   RUN_USER="$(whoami)"
-  for svc in prism-scanner prism-proxy prism-monitor; do
+  for svc in prism-scanner prism-proxy prism-monitor prism-dashboard; do
     sudo cp "$INSTALL_DIR/systemd/${svc}.service" /etc/systemd/system/
     # Replace user placeholder and inject environment file
     sudo sed -i "s/__PRISM_USER__/$RUN_USER/" "/etc/systemd/system/${svc}.service"
@@ -207,8 +253,8 @@ if [ -d /etc/systemd/system ] && command -v systemctl &>/dev/null; then
   done
 
   sudo systemctl daemon-reload
-  sudo systemctl enable prism-scanner prism-proxy prism-monitor
-  sudo systemctl start prism-scanner prism-proxy prism-monitor
+  sudo systemctl enable prism-scanner prism-proxy prism-monitor prism-dashboard
+  sudo systemctl start prism-scanner prism-proxy prism-monitor prism-dashboard
 
   echo "  Services started."
 
@@ -221,6 +267,7 @@ elif [ "$(uname)" = "Darwin" ]; then
   echo "    source $ENV_FILE && npx tsx $INSTALL_DIR/packages/scanner/src/index.ts &"
   echo "    source $ENV_FILE && npx tsx $INSTALL_DIR/packages/proxy/src/index.ts &"
   echo "    source $ENV_FILE && npx tsx $INSTALL_DIR/packages/monitor/src/index.ts &"
+  echo "    source $ENV_FILE && npx tsx $INSTALL_DIR/packages/dashboard/src/index.ts &"
 
 else
   echo "  No systemd found. Start services manually:"
@@ -228,6 +275,7 @@ else
   echo "    node $INSTALL_DIR/packages/scanner/dist/index.js &"
   echo "    node $INSTALL_DIR/packages/proxy/dist/index.js &"
   echo "    node $INSTALL_DIR/packages/monitor/dist/index.js &"
+  echo "    node $INSTALL_DIR/packages/dashboard/dist/index.js &"
 fi
 
 # ── 7. Verify ──
@@ -235,7 +283,7 @@ echo "[7/7] Verifying installation..."
 sleep 2
 
 OK=true
-for port_name in "18766:scanner" "18767:proxy"; do
+for port_name in "18766:scanner" "18767:proxy" "18768:dashboard"; do
   PORT="${port_name%%:*}"
   NAME="${port_name##*:}"
   if curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
@@ -254,10 +302,12 @@ else
   echo "  PRISM installed. Some services need manual start."
 fi
 echo ""
-echo "  Config:   $INSTALL_DIR/config/"
-echo "  Secrets:  $ENV_FILE"
-echo "  Logs:     $SECURITY_DIR/audit.jsonl"
-echo "  Plugin:   $PLUGIN_DIR"
+echo "  Config:     $INSTALL_DIR/config/"
+echo "  Policy:     $SECURITY_DIR/security.policy.json"
+echo "  Secrets:    $ENV_FILE"
+echo "  Logs:       $SECURITY_DIR/audit.jsonl"
+echo "  Plugin:     $PLUGIN_DIR"
+echo "  Dashboard:  http://127.0.0.1:18768"
 echo ""
 if grep -q "change-me" "$ENV_FILE" 2>/dev/null; then
   echo "  NOTE: Set OPENCLAW_GATEWAY_TOKEN in $ENV_FILE"

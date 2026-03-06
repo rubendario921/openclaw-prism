@@ -1,0 +1,16 @@
+[Unit]
+Description=PRISM Security Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=__PRISM_USER__
+ExecStart=/usr/bin/node --enable-source-maps /opt/openclaw-prism/packages/dashboard/dist/index.js
+Environment=DASHBOARD_HOST=127.0.0.1
+Environment=DASHBOARD_PORT=18768
+Environment=PRISM_DASHBOARD_START=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

